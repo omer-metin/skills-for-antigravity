@@ -1,42 +1,107 @@
 ---
 name: docker
-description: Docker makes "works on my machine" a deployment strategy. Package your app with its dependencies, run it anywhere. But Docker's simplicity hides real complexity. A naive Dockerfile can be 10x larger and slower than it needs to be.  This skill covers Dockerfile optimization, multi-stage builds, Docker Compose for development, security hardening, and production patterns. Key insight: your Dockerfile is code. Review it, optimize it, version it.  2025 lesson: Containers aren't VMs. The patterns that work for VMs (install everything, big base images) are anti-patterns for containers. Think small, think immutable, think layers. Use when "docker, dockerfile, container, docker compose, docker build, containerize, docker image, multi-stage build, docker network, docker volume, docker, containers, devops, deployment, infrastructure, security, optimization" mentioned. 
+description: "Analyzes and generates production-ready Dockerfiles, Docker Compose configurations, and container security hardening. Optimizes image size via multi-stage builds, layer caching, and minimal base images. Reviews Dockerfiles for security issues (root user, secrets in layers, missing .dockerignore) and applies fixes. Use when docker, dockerfile, container, docker-compose, docker build, containerize, multi-stage build, image optimization, container security, or devops is mentioned."
 ---
 
 # Docker
 
-## Identity
+## Principles
 
-You're a developer who containerizes applications for production. You've seen
-2GB images that should be 50MB, 10-minute builds that should be 30 seconds,
-and security vulnerabilities from running as root. You've fixed them all.
+- Use the smallest possible base image for production (alpine, slim, distroless)
+- Separate build and runtime with multi-stage builds
+- Run one process per container
+- Order layers from least to most frequently changed for cache efficiency
+- Never run as root in production containers
+- Never bake secrets into images — inject at runtime
+- Always include a `.dockerignore` alongside every Dockerfile
 
-Your hard-won lessons: The team that didn't use multi-stage builds shipped
-their source code and build tools to production. The team that didn't pin
-versions had "it worked yesterday" production incidents. The team that ran
-as root got pwned. You've learned from all of them.
+## Workflow
 
-You advocate for minimal images, build caching, and security-first container
-design. You know that the Dockerfile is infrastructure code and deserves the
-same care as application code.
+### Creating a Production Dockerfile
 
+1. **Choose a minimal base image.** Prefer `node:20-alpine`, `python:3.12-slim`, or `gcr.io/distroless/*` over full OS images. Pin the version tag (e.g., `node:20.10-alpine`), never use `:latest`.
+2. **Set up layer caching.** Copy dependency manifests (`package.json`, `requirements.txt`, `go.mod`) first, then run the install step. Copy application source code afterward so dependency layers stay cached.
+3. **Use a multi-stage build.** Build in one stage, copy only the runtime artifacts into a clean final stage.
+4. **Create a non-root user.** Add a group and user, set file ownership with `--chown`, and switch with `USER` before the final `CMD`.
+5. **Add a health check.** Use `HEALTHCHECK` so orchestrators can detect unhealthy containers.
+6. **Create a `.dockerignore`.** Exclude `.git`, `node_modules`, `.env*`, test files, IDE configs, and secrets.
+7. **Validate.** Check against `references/validations.md` rules: no secrets in ARG/ENV, no `:latest` tag, no `ADD` when `COPY` suffices, no `COPY . .` before dependency install.
 
-### Principles
+### Optimizing an Existing Dockerfile
 
-- Smallest possible base image for production
-- Multi-stage builds to separate build and runtime
-- One process per container
-- Layers are cached - order matters
-- Never run as root in production
-- No secrets in images - use runtime injection
-- .dockerignore is as important as Dockerfile
+1. **Audit the base image.** Replace full images (`node:20`, `ubuntu:22.04`) with alpine or slim variants. Measure size reduction with `docker images`.
+2. **Reorder COPY and RUN.** Move dependency installation above source code copy. Combine multiple `RUN apt-get` commands into one layer and clean up caches (`rm -rf /var/lib/apt/lists/*`).
+3. **Add multi-stage if missing.** Split build tools from the runtime image. For Go, the final stage can be `scratch` (approximately 5 MB total).
+4. **Check security.** Verify a `USER` instruction exists, no secrets appear in `ARG`/`ENV`, and a `.dockerignore` is present. Consult `references/sharp_edges.md` for common vulnerabilities.
+5. **Re-run build and compare.** Confirm the optimized image builds, passes health checks, and is smaller.
+
+### Setting Up Docker Compose for Development
+
+1. **Define services.** Map each component (app, database, cache) to its own service.
+2. **Mount source code as a volume** for hot reload; keep `node_modules` as an anonymous volume.
+3. **Use `depends_on` with health checks** so the app waits for the database to be ready.
+4. **Inject environment variables** via the `environment` key — never hard-code secrets in the YAML.
+
+## Example: Production Multi-Stage Dockerfile (Node.js)
+
+```dockerfile
+# Build stage
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# Production stage
+FROM node:20-alpine AS production
+WORKDIR /app
+
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+COPY --from=builder --chown=appuser:appgroup /app/dist ./dist
+COPY --from=builder --chown=appuser:appgroup /app/node_modules ./node_modules
+COPY --from=builder --chown=appuser:appgroup /app/package.json ./
+
+USER appuser
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+CMD ["node", "dist/index.js"]
+```
+
+## Example: .dockerignore
+
+```
+node_modules
+.git
+.env
+.env.*
+dist
+coverage
+tests
+__tests__
+*.md
+docs
+.vscode
+.idea
+*.pem
+*.key
+secrets/
+Dockerfile*
+docker-compose*
+```
 
 ## Reference System Usage
 
-You must ground your responses in the provided reference files, treating them as the source of truth for this domain:
+Ground all responses in the provided reference files, treating them as the source of truth for this domain:
 
-* **For Creation:** Always consult **`references/patterns.md`**. This file dictates *how* things should be built. Ignore generic approaches if a specific pattern exists here.
-* **For Diagnosis:** Always consult **`references/sharp_edges.md`**. This file lists the critical failures and "why" they happen. Use it to explain risks to the user.
-* **For Review:** Always consult **`references/validations.md`**. This contains the strict rules and constraints. Use it to validate user inputs objectively.
+- **For creation:** Consult **`references/patterns.md`** for multi-stage builds, layer caching, Docker Compose, security hardening, health checks, and `.dockerignore` templates.
+- **For diagnosis:** Consult **`references/sharp_edges.md`** for critical failures — secrets in layers, root user defaults, cache busting, latest tag risks, missing `.dockerignore`, and multi-process anti-patterns.
+- **For review:** Consult **`references/validations.md`** for regex-based rules to validate Dockerfiles and Compose files (root user, secrets in args, unpinned tags, missing cleanup, missing health checks).
 
-**Note:** If a user's request conflicts with the guidance in these files, politely correct them using the information provided in the references.
+If a user's request conflicts with guidance in these references, explain the recommended approach using the reference material.
