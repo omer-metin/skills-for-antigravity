@@ -217,6 +217,35 @@ Want minimal setup, automatic cost tracking
 
 ---
   #### **Name**
+Self-Hosted Gateway Proxy (Bifrost)
+  #### **Description**
+Zero-code tracing and cost tracking through an open-source gateway you run yourself
+  #### **When To Use**
+Want proxy-style observability without routing traffic through a third-party service
+  #### **Implementation**
+    // lib/bifrost-openai.ts
+    // Start the gateway: npx -y @maximhq/bifrost  (or: docker run -p 8080:8080 maximhq/bifrost)
+    // Add provider keys in the web UI at http://localhost:8080. Every request is logged there
+    // with tokens, cost and latency; Prometheus metrics are at /metrics, and the otel plugin
+    // exports traces to any OTLP backend (e.g. Langfuse). https://github.com/maximhq/bifrost
+    import OpenAI from "openai";
+    
+    export const openai = new OpenAI({
+      apiKey: process.env.BIFROST_VIRTUAL_KEY!, // sk-bf-... virtual key: per-key budgets and rate limits
+      baseURL: "http://localhost:8080/openai",
+    });
+    
+    // Same client, any configured provider: prefix the model with the provider
+    await openai.chat.completions.create({
+      model: "anthropic/claude-3-5-haiku-latest",
+      messages: [{ role: "user", content: "Hello" }],
+    });
+    
+    // For the Anthropic SDK, use baseURL "http://localhost:8080/anthropic"
+    
+
+---
+  #### **Name**
 Cost Tracking Dashboard
   #### **Description**
 Track and budget LLM costs per user/feature
